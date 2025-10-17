@@ -29,9 +29,9 @@ public final class RenderUtil {
   static {
     Font loadedFont;
 
-    try (InputStream inputStream = RenderUtil.class.getResourceAsStream("/__minecraft_font.ttf")) {
+    try (InputStream inputStream = RenderUtil.class.getResourceAsStream("/minecraft_font.ttf")) {
       if (inputStream == null) {
-        throw new IOException("Could not find minecraft_font.ttf in resources");
+        throw new IOException("Could not find minecraft_font.ttf");
       }
 
       loadedFont = Font.createFont(Font.TRUETYPE_FONT, inputStream).deriveFont(16f);
