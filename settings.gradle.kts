@@ -1,2 +1,5 @@
-rootProject.name = "minecraft-visual-render"
+plugins {
+    id("org.gradle.toolchains.foojay-resolver-convention") version "1.0.0"
+}
 
+rootProject.name = "minecraft-visual-renderer"
