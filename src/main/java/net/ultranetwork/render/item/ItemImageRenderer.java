@@ -10,6 +10,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ForkJoinPool;
 import net.kyori.adventure.text.Component;
+import net.ultranetwork.render.Backdrop;
 import net.ultranetwork.render.RenderEnvironment;
 import net.ultranetwork.render.tooltip.TooltipRenderer;
 import org.bukkit.entity.Player;
@@ -37,7 +38,7 @@ public final class ItemImageRenderer {
     private boolean advanced;
     private boolean creative;
     private int scale = 2;
-    private @Nullable Color backdrop;
+    private @Nullable Backdrop backdrop;
     private @Nullable RenderEnvironment environment;
 
     private Builder() {
@@ -81,6 +82,13 @@ public final class ItemImageRenderer {
     }
 
     public @NotNull Builder backdrop(@Nullable Color backdrop) {
+      return this.backdrop(backdrop == null ? null : Backdrop.solid(backdrop));
+    }
+
+    /**
+     * Paints behind the tooltip, e.g. {@link Backdrop#sky()}. Transparent by default.
+     */
+    public @NotNull Builder backdrop(@Nullable Backdrop backdrop) {
       this.backdrop = backdrop;
       return this;
     }

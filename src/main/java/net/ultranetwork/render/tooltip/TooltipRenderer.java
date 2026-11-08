@@ -12,6 +12,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.ForkJoinPool;
 import net.kyori.adventure.key.Key;
 import net.kyori.adventure.text.Component;
+import net.ultranetwork.render.Backdrop;
 import net.ultranetwork.render.RenderEnvironment;
 import net.ultranetwork.render.graphics.Canvas;
 import net.ultranetwork.render.graphics.Sprite;
@@ -35,7 +36,7 @@ public final class TooltipRenderer {
   private final List<Component> lines;
   private final @Nullable Key style;
   private final int scale;
-  private final @Nullable Color backdrop;
+  private final @Nullable Backdrop backdrop;
   private final RenderEnvironment environment;
 
   private TooltipRenderer(Builder builder) {
@@ -91,7 +92,7 @@ public final class TooltipRenderer {
     private final List<Component> lines = new ArrayList<>();
     private @Nullable Key style;
     private int scale = 2;
-    private @Nullable Color backdrop;
+    private @Nullable Backdrop backdrop;
     private @Nullable RenderEnvironment environment;
 
     private Builder() {
@@ -131,6 +132,13 @@ public final class TooltipRenderer {
      * Fills the area behind the (partly translucent) tooltip. Transparent by default.
      */
     public @NotNull Builder backdrop(@Nullable Color backdrop) {
+      return this.backdrop(backdrop == null ? null : Backdrop.solid(backdrop));
+    }
+
+    /**
+     * Paints behind the tooltip, e.g. {@link Backdrop#sky()}. Transparent by default.
+     */
+    public @NotNull Builder backdrop(@Nullable Backdrop backdrop) {
       this.backdrop = backdrop;
       return this;
     }

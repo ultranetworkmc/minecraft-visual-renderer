@@ -105,12 +105,18 @@ Skins are fetched from Mojang, or from `PlayerListEntry#skinUrl` if set. Results
 All builders support:
 
 - `scale(int)`: output pixels per GUI pixel, like the GUI scale setting (default 2).
-- `backdrop(Color)`: fills the area behind the translucent background (default transparent).
+- `backdrop(Color)` or `backdrop(Backdrop)`: paints behind the translucent background (default transparent).
+  `Backdrop.sky()` is vanilla's daytime sky gradient, so the image looks like the overlay in game.
+  `Backdrop.gradient(top, bottom)` gives a custom gradient.
 - `environment(RenderEnvironment)`: overrides the default environment.
 - `build(Executor)`: renders on your own executor.
 
-The tab list also has `screenWidth(int)`. This is the scaled screen width the list is laid out for, which caps
-column widths and wraps the header and footer (default 480).
+The tab list also has:
+
+- `screenWidth(int)`: the scaled screen width the list is laid out for, which caps column widths and wraps the
+  header and footer (default 480).
+- `transparentBackground(true)`: leaves out the translucent black panel and row highlights, so only text, heads,
+  scores and signal bars are drawn. This suits dark backgrounds like Discord.
 
 ## Development
 

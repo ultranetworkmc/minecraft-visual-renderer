@@ -40,6 +40,9 @@ class VanillaAssetsTest {
   void rendersSamples() throws IOException {
     Samples.write("vanilla_tooltip", Samples.tooltip(env));
     Samples.write("vanilla_tab_list", Samples.tabList(env));
+    Samples.write("vanilla_tab_list_transparent", Samples.tabList(env, true, null));
+    Samples.write("vanilla_tab_list_sky", Samples.tabList(env, false, Backdrop.sky()));
+    Samples.write("vanilla_tab_list_transparent_sky", Samples.tabList(env, true, Backdrop.sky()));
   }
 
   @Test

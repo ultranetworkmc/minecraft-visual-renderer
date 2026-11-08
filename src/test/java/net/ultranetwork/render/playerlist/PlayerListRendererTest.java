@@ -6,6 +6,7 @@ import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.List;
 import net.kyori.adventure.text.Component;
+import net.ultranetwork.render.Backdrop;
 import net.ultranetwork.render.RenderEnvironment;
 import org.junit.jupiter.api.Test;
 
@@ -30,6 +31,30 @@ class PlayerListRendererTest {
     // Column spans x=1..41; the icon starts 11px before its end. The tallest bar is at icon (8, 1).
     final int iconLeft = 1 + 41 - 11;
     assertEquals(0x00FF21, image.getRGB(iconLeft + 8, 1 + 1) & 0xFFFFFF);
+  }
+
+  @Test
+  void transparentBackgroundKeepsLayoutButDropsPanels() {
+    final PlayerListEntry steve = PlayerListEntry.builder("Steve").latency(20).build();
+    final BufferedImage normal = tab().entry(steve).build().join();
+    final BufferedImage transparent = tab().transparentBackground(true).entry(steve).build().join();
+
+    assertEquals(normal.getWidth(), transparent.getWidth());
+    assertEquals(normal.getHeight(), transparent.getHeight());
+    assertEquals(0, transparent.getRGB(0, 0) >>> 24, "no black panel");
+    assertEquals(0, transparent.getRGB(transparent.getWidth() - 2, 9) >>> 24, "no row highlight");
+    assertEquals(0xFF00FF21, transparent.getRGB(1 + 41 - 11 + 8, 2), "signal bars are still drawn");
+  }
+
+  @Test
+  void skyBackdropShowsThroughTheTranslucentPanel() {
+    final BufferedImage image = tab().backdrop(Backdrop.sky()).entry(PlayerListEntry.of("Steve")).build().join();
+    // Half-transparent black over the top sky colour 0x78A7FF.
+    assertEquals(0xFF3C537F, image.getRGB(0, 0));
+
+    final BufferedImage transparent = tab().backdrop(Backdrop.sky()).transparentBackground(true)
+        .entry(PlayerListEntry.of("Steve")).build().join();
+    assertEquals(0xFF78A7FF, transparent.getRGB(0, 0));
   }
 
   @Test

@@ -39,8 +39,14 @@ final class Samples {
   }
 
   static BufferedImage tabList(RenderEnvironment env) {
+    return tabList(env, false, null);
+  }
+
+  static BufferedImage tabList(RenderEnvironment env, boolean transparentBackground, Backdrop backdrop) {
     return PlayerListRenderer.builder()
         .environment(env)
+        .transparentBackground(transparentBackground)
+        .backdrop(backdrop)
         .skinProvider(SkinProvider.none())
         .showHeads(env.usesVanillaAssets())
         .header(Component.text("My Server", NamedTextColor.GOLD).decorate(TextDecoration.BOLD))

@@ -10,6 +10,7 @@ import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import javax.imageio.ImageIO;
+import net.ultranetwork.render.Backdrop;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -76,14 +77,20 @@ public final class ImageUtil {
    * @return the image composited over a solid backdrop, or the image itself when {@code backdrop} is {@code null}
    */
   public static @NotNull BufferedImage withBackdrop(@NotNull BufferedImage image, @Nullable Color backdrop) {
+    return withBackdrop(image, backdrop == null ? null : Backdrop.solid(backdrop));
+  }
+
+  /**
+   * @return the image composited over the backdrop, or the image itself when {@code backdrop} is {@code null}
+   */
+  public static @NotNull BufferedImage withBackdrop(@NotNull BufferedImage image, @Nullable Backdrop backdrop) {
     if (backdrop == null) {
       return image;
     }
     final BufferedImage result = new BufferedImage(image.getWidth(), image.getHeight(), BufferedImage.TYPE_INT_ARGB);
     final Graphics2D graphics = result.createGraphics();
     try {
-      graphics.setColor(backdrop);
-      graphics.fillRect(0, 0, image.getWidth(), image.getHeight());
+      backdrop.paint(graphics, image.getWidth(), image.getHeight());
       graphics.drawImage(image, 0, 0, null);
     }
     finally {

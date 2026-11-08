@@ -15,6 +15,7 @@ import java.util.regex.Pattern;
 import net.kyori.adventure.key.Key;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.TextDecoration;
+import net.ultranetwork.render.Backdrop;
 import net.ultranetwork.render.RenderEnvironment;
 import net.ultranetwork.render.graphics.Canvas;
 import net.ultranetwork.render.graphics.Sprite;
@@ -57,7 +58,8 @@ public final class PlayerListRenderer {
   private final boolean showHeads;
   private final int screenWidth;
   private final int scale;
-  private final @Nullable Color backdrop;
+  private final @Nullable Backdrop backdrop;
+  private final boolean transparentBackground;
 
   private PlayerListRenderer(Snapshot snapshot, List<@Nullable Texture> skins) {
     this.environment = snapshot.environment;
@@ -69,6 +71,7 @@ public final class PlayerListRenderer {
     this.screenWidth = snapshot.screenWidth;
     this.scale = snapshot.scale;
     this.backdrop = snapshot.backdrop;
+    this.transparentBackground = snapshot.transparentBackground;
   }
 
   public static @NotNull Builder builder() {
@@ -141,7 +144,7 @@ public final class PlayerListRenderer {
     int y = 10;
 
     if (!headerLines.isEmpty()) {
-      canvas.fill(boxLeft, y - 1, boxRight, y + headerLines.size() * TextRenderer.LINE_HEIGHT, BACKGROUND);
+      this.fillBackground(canvas, boxLeft, y - 1, boxRight, y + headerLines.size() * TextRenderer.LINE_HEIGHT, BACKGROUND);
       for (StyledText line : headerLines) {
         TextRenderer.draw(canvas, env, line, screen / 2 - TextRenderer.width(env, line) / 2, y, 0xFFFFFFFF, true,
             random);
@@ -150,13 +153,13 @@ public final class PlayerListRenderer {
       y++;
     }
 
-    canvas.fill(boxLeft, y - 1, boxRight, y + rows * TextRenderer.LINE_HEIGHT, BACKGROUND);
+    this.fillBackground(canvas, boxLeft, y - 1, boxRight, y + rows * TextRenderer.LINE_HEIGHT, BACKGROUND);
     for (int i = 0; i < count; i++) {
       final int column = i / rows;
       final int row = i % rows;
       final int columnLeft = gridLeft + column * columnWidth + column * COLUMN_GAP;
       final int rowTop = y + row * TextRenderer.LINE_HEIGHT;
-      canvas.fill(columnLeft, rowTop, columnLeft + columnWidth, rowTop + 8, ROW_BACKGROUND);
+      this.fillBackground(canvas, columnLeft, rowTop, columnLeft + columnWidth, rowTop + 8, ROW_BACKGROUND);
 
       final PlayerListEntry entry = this.entries.get(i);
       int x = columnLeft;
@@ -182,7 +185,7 @@ public final class PlayerListRenderer {
 
     if (!footerLines.isEmpty()) {
       y += rows * TextRenderer.LINE_HEIGHT + 1;
-      canvas.fill(boxLeft, y - 1, boxRight, y + footerLines.size() * TextRenderer.LINE_HEIGHT, BACKGROUND);
+      this.fillBackground(canvas, boxLeft, y - 1, boxRight, y + footerLines.size() * TextRenderer.LINE_HEIGHT, BACKGROUND);
       for (StyledText line : footerLines) {
         TextRenderer.draw(canvas, env, line, screen / 2 - TextRenderer.width(env, line) / 2, y, 0xFFFFFFFF, true,
             random);
@@ -191,6 +194,12 @@ public final class PlayerListRenderer {
     }
 
     return ImageUtil.withBackdrop(canvas.toImage(), this.backdrop);
+  }
+
+  private void fillBackground(Canvas canvas, int x0, int y0, int x1, int y1, int argb) {
+    if (!this.transparentBackground) {
+      canvas.fill(x0, y0, x1, y1, argb);
+    }
   }
 
   private List<StyledText> lines(@Nullable Component component) {
@@ -259,7 +268,8 @@ public final class PlayerListRenderer {
       SkinProvider skinProvider,
       int screenWidth,
       int scale,
-      @Nullable Color backdrop
+      @Nullable Backdrop backdrop,
+      boolean transparentBackground
   ) {
   }
 
@@ -272,7 +282,8 @@ public final class PlayerListRenderer {
     private SkinProvider skinProvider = SkinProvider.mojang();
     private int screenWidth = 480;
     private int scale = 2;
-    private @Nullable Color backdrop;
+    private @Nullable Backdrop backdrop;
+    private boolean transparentBackground;
     private @Nullable RenderEnvironment environment;
 
     private Builder() {
@@ -347,7 +358,25 @@ public final class PlayerListRenderer {
      * Fills the area behind the translucent overlay (in game this is the world). Transparent by default.
      */
     public @NotNull Builder backdrop(@Nullable Color backdrop) {
+      return this.backdrop(backdrop == null ? null : Backdrop.solid(backdrop));
+    }
+
+    /**
+     * Paints behind the overlay, e.g. {@link Backdrop#sky()} for the look of the tab list over a daytime sky.
+     * Transparent by default.
+     */
+    public @NotNull Builder backdrop(@Nullable Backdrop backdrop) {
       this.backdrop = backdrop;
+      return this;
+    }
+
+    /**
+     * Skips the translucent black panel and row highlights, so only text, heads, scores and signal bars are drawn
+     * on a fully transparent image. Useful when the image is shown on a dark background such as Discord. The layout
+     * and image size are unchanged. Off by default.
+     */
+    public @NotNull Builder transparentBackground(boolean transparentBackground) {
+      this.transparentBackground = transparentBackground;
       return this;
     }
 
@@ -363,7 +392,7 @@ public final class PlayerListRenderer {
           this.environment != null ? this.environment : RenderEnvironment.defaultEnvironment(),
           this.header, this.footer,
           List.copyOf(sorted.subList(0, Math.min(MAX_PLAYERS, sorted.size()))),
-          this.showHeads, this.skinProvider, this.screenWidth, this.scale, this.backdrop);
+          this.showHeads, this.skinProvider, this.screenWidth, this.scale, this.backdrop, this.transparentBackground);
     }
 
     public @NotNull CompletableFuture<BufferedImage> build() {
