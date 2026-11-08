@@ -1,379 +1,396 @@
 package net.ultranetwork.render.playerlist;
 
 import java.awt.Color;
-import java.awt.FontMetrics;
-import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
+import java.util.Random;
 import java.util.concurrent.CompletableFuture;
-import java.util.stream.Collectors;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ForkJoinPool;
+import java.util.regex.Pattern;
+import net.kyori.adventure.key.Key;
 import net.kyori.adventure.text.Component;
-import net.kyori.adventure.text.format.NamedTextColor;
-import net.ultranetwork.render.util.HeadUtil;
-import net.ultranetwork.render.util.RenderUtil;
+import net.kyori.adventure.text.format.TextDecoration;
+import net.ultranetwork.render.RenderEnvironment;
+import net.ultranetwork.render.graphics.Canvas;
+import net.ultranetwork.render.graphics.Sprite;
+import net.ultranetwork.render.graphics.Texture;
+import net.ultranetwork.render.skin.SkinProvider;
+import net.ultranetwork.render.skin.Skins;
+import net.ultranetwork.render.text.StyledText;
+import net.ultranetwork.render.text.TextRenderer;
+import net.ultranetwork.render.util.ImageUtil;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
+/**
+ * Renders the player list (tab list) exactly like the client's {@code PlayerTabOverlay}.
+ */
 public final class PlayerListRenderer {
-  private static final int DEFAULT_MAX_PLAYERS_PER_COLUMN = 20;
-  private static final int DEFAULT_COLUMN_SPACING = 10;
-  private static final int DEFAULT_PADDING = 5;
-  private static final int FOOTER_EXTRA_SPACING = 6;
-  private static final int HEADER_FOOTER_PADDING = 4;
-  private static final int PLAYER_NAME_PING_SPACING = 4;
-  private static final int PING_BAR_WIDTH = 2;
-  private static final int PING_BAR_HEIGHT_INCREMENT = 2;
-  private static final int PING_BAR_SPACING = 1;
-  private static final int PLAYER_LINE_HEIGHT = 18;
-  private static final int PLAYER_HEAD_SIZE = 16;
-  private static final int PLAYER_HEAD_NAME_SPACING = 2; // Space between head and name
+  /**
+   * The client's sort order: list order (descending), non-spectators first, team name, then profile name.
+   */
+  public static final Comparator<PlayerListEntry> VANILLA_ORDER = Comparator
+      .comparingInt((PlayerListEntry entry) -> -entry.order())
+      .thenComparingInt(entry -> entry.spectator() ? 1 : 0)
+      .thenComparing(entry -> Objects.requireNonNullElse(entry.team(), ""))
+      .thenComparing(PlayerListEntry::name, String::compareToIgnoreCase);
 
-  // Colours specific to PlayerList
-  private static final Color BACKGROUND_COLOUR = new Color(56, 70, 117);
-  private static final Color TAB_TEXT_SHADOW_COLOUR = new Color(0, 0, 0, 80);
+  private static final int MAX_PLAYERS = 80;
+  private static final int MAX_ROWS_PER_COLUMN = 20;
+  private static final int COLUMN_GAP = 5;
+  private static final int SCREEN_MARGIN = 50;
+  private static final int BACKGROUND = 0x80000000;
+  private static final int ROW_BACKGROUND = 0x20FFFFFF;
+  private static final int SPECTATOR_COLOUR = 0x90FFFFFF;
+  private static final Pattern UPSIDE_DOWN_NAMES = Pattern.compile("Dinnerbone|Grumm");
 
-  // Ping thresholds and colours
-  private static final Color PING_GOOD_COLOUR = new Color(0, 255, 0);
-  private static final Color PING_MEDIUM_COLOUR = new Color(255, 255, 0);
-  private static final Color PING_BAD_COLOUR = new Color(255, 85, 85);
-  private static final Color PING_VERY_BAD_COLOUR = new Color(170, 0, 0);
-  private static final Color PING_UNKNOWN_COLOUR = new Color(170, 170, 170);
-
-  // todo this
-  private static final int PING_GOOD_THRESHOLD = 150;
-  private static final int PING_MEDIUM_THRESHOLD = 300;
-  private static final int PING_BAD_THRESHOLD = 500;
-
-  private final Component header;
-  private final Component footer;
-  private final List<PlayerListName> players;
-  private final int maxPlayersPerColumn;
-  private final int columnSpacing;
-  private final int padding;
+  private final RenderEnvironment environment;
+  private final @Nullable Component header;
+  private final @Nullable Component footer;
+  private final List<PlayerListEntry> entries;
+  private final List<@Nullable Texture> skins;
   private final boolean showHeads;
-  private final Map<String, BufferedImage> playerHeads;
+  private final int screenWidth;
+  private final int scale;
+  private final @Nullable Color backdrop;
 
-  private PlayerListRenderer(
-      Builder builder,
-      Map<String, BufferedImage> fetchedHeads)
-  {
-    this.header = builder.header != null ? builder.header : Component.empty();
-    this.footer = builder.footer != null ? builder.footer : Component.empty();
-    this.players = List.copyOf(builder.names);
-    this.maxPlayersPerColumn = builder.maxPlayersPerColumn;
-    this.columnSpacing = builder.columnSpacing;
-    this.padding = builder.padding;
-    this.showHeads = builder.showHeads;
-    this.playerHeads = fetchedHeads;
+  private PlayerListRenderer(Snapshot snapshot, List<@Nullable Texture> skins) {
+    this.environment = snapshot.environment;
+    this.header = snapshot.header;
+    this.footer = snapshot.footer;
+    this.entries = snapshot.entries;
+    this.skins = skins;
+    this.showHeads = snapshot.showHeads;
+    this.screenWidth = snapshot.screenWidth;
+    this.scale = snapshot.scale;
+    this.backdrop = snapshot.backdrop;
   }
 
-  private BufferedImage render() {
-    final int playerCount = this.players.size();
-    final int numColumns = (playerCount == 0) ? 0 :
-        Math.min(4, (playerCount + this.maxPlayersPerColumn - 1) / this.maxPlayersPerColumn);
-
-    final BufferedImage tempImage = new BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB);
-    final Graphics2D tempG = tempImage.createGraphics();
-    tempG.setFont(RenderUtil.MINECRAFT_FONT);
-
-    final int headerHeight = !Component.empty().equals(this.header) ? PLAYER_LINE_HEIGHT + HEADER_FOOTER_PADDING * 2 : 0;
-    final int footerHeight = !Component.empty().equals(this.footer) ? PLAYER_LINE_HEIGHT + HEADER_FOOTER_PADDING * 2 : 0;
-
-    final FontMetrics metrics = tempG.getFontMetrics();
-    final int headerWidth = RenderUtil.calculateComponentWidth(metrics, this.header);
-    final int footerWidth = RenderUtil.calculateComponentWidth(metrics, this.footer);
-    final int maxHeaderFooterWidth = Math.max(headerWidth, footerWidth);
-
-    int maxPlayerNameWidth = 0;
-    for (PlayerListName playerListName : this.players) {
-      final Component nameToMeasure = playerListName.listNameComponent();
-      maxPlayerNameWidth = Math.max(maxPlayerNameWidth, RenderUtil.calculateComponentWidth(metrics, nameToMeasure));
-    }
-
-    final int pingBarsWidth = (PING_BAR_WIDTH + PING_BAR_SPACING) * 5 - PING_BAR_SPACING;
-    final int headAreaWidth = this.showHeads
-        ? PLAYER_HEAD_SIZE + PLAYER_HEAD_NAME_SPACING
-        : 0;
-
-    // Width needed for one column's content (head + name + ping)
-    final int singleColumnContentWidth = headAreaWidth + maxPlayerNameWidth + PLAYER_NAME_PING_SPACING + pingBarsWidth;
-
-    // Total width for all content columns + spacing between them
-    final int requiredContentWidth = numColumns * singleColumnContentWidth + Math.max(0, numColumns - 1) * this.columnSpacing;
-
-    // Image width is max of content area or header/footer, plus padding
-    final int imageWidth = Math.max(requiredContentWidth, maxHeaderFooterWidth) + this.padding * 2;
-
-    // Calculate actual column width based on final image width
-    final int actualContentWidth = imageWidth - this.padding * 2;
-    final int columnWidth = (numColumns == 0) ? actualContentWidth
-        : (actualContentWidth - Math.max(0, numColumns - 1) * this.columnSpacing) / numColumns;
-
-    // Calculate height
-    final int numRowsNeeded = (playerCount == 0) ? 0 : (int) Math.ceil((double) playerCount / numColumns);
-    final int actualNumRowsDisplayed = Math.min(this.maxPlayersPerColumn, numRowsNeeded);
-    final int playersHeight = actualNumRowsDisplayed * PLAYER_LINE_HEIGHT;
-    final int extraSpacing = (footerHeight > 0 && playersHeight > 0) ? FOOTER_EXTRA_SPACING : 0;
-    final int imageHeight = headerHeight + playersHeight + extraSpacing + footerHeight + this.padding * 2;
-
-    tempG.dispose();
-
-    // final image
-    final BufferedImage finalImage = new BufferedImage(imageWidth, imageHeight, BufferedImage.TYPE_INT_ARGB);
-    final Graphics2D graphics = finalImage.createGraphics();
-    graphics.setFont(RenderUtil.MINECRAFT_FONT);
-    RenderUtil.applyMinecraftRenderingHints(graphics);
-
-    // Draw background
-    graphics.setColor(BACKGROUND_COLOUR);
-    graphics.fillRect(0, 0, imageWidth, imageHeight);
-
-    // Draw header
-    int currentY = this.padding;
-    if (headerHeight > 0) {
-      final int headerTextWidth = RenderUtil.calculateComponentWidth(metrics, this.header); // Use actual metrics
-      final int headerX = this.padding + Math.max(0, (actualContentWidth - headerTextWidth) / 2);
-      final int headerBaselineY = currentY + HEADER_FOOTER_PADDING + metrics.getAscent();
-
-      RenderUtil.drawAdventureComponent(graphics, this.header, headerX, headerBaselineY, RenderUtil.DEFAULT_TEXT_COLOUR, TAB_TEXT_SHADOW_COLOUR);
-      currentY += headerHeight;
-    }
-
-    // Draw players
-    final int playerGridY = currentY;
-    int playerIndex = 0;
-    for (int col = 0; col < numColumns; col++) {
-      final int columnStartX = this.padding + col * (columnWidth + this.columnSpacing);
-
-      for (int row = 0; row < actualNumRowsDisplayed; row++) {
-        if (playerIndex >= this.players.size())
-          break;
-
-        final PlayerListName playerRenderData = this.players.get(playerIndex++);
-        final int playerBaseY = playerGridY + row * PLAYER_LINE_HEIGHT;
-        final int playerTextBaselineY = playerBaseY + metrics.getAscent();
-        int currentDrawX = columnStartX; // Starting X for this player entry
-
-        // Draw head
-        if (this.showHeads) {
-          final BufferedImage headImage = this.playerHeads.get(playerRenderData.plainListName());
-
-          if (headImage != null) {
-            final int headY = playerBaseY + (PLAYER_LINE_HEIGHT - PLAYER_HEAD_SIZE) / 2; // center
-            graphics.drawImage(headImage, currentDrawX, headY, PLAYER_HEAD_SIZE, PLAYER_HEAD_SIZE, null);
-          }
-
-          // Always continue X even if head is missing t maintain alignment
-          currentDrawX += PLAYER_HEAD_SIZE + PLAYER_HEAD_NAME_SPACING;
-        }
-
-        RenderUtil.drawAdventureComponent(graphics, playerRenderData.listNameComponent(),
-            currentDrawX,
-            playerTextBaselineY,
-            RenderUtil.DEFAULT_TEXT_COLOUR,
-            TAB_TEXT_SHADOW_COLOUR);
-
-        // Calculate ping X relative to the right edge of the columns content area
-        final int columnContentEndX = columnStartX + columnWidth;
-        final int pingX = columnContentEndX - pingBarsWidth;
-
-        // Calculate ping Y centered vertically within the line height
-        final int totalPingHeight = PING_BAR_HEIGHT_INCREMENT * 5; // 5 = max height
-        final int pingYOffset = (PLAYER_LINE_HEIGHT - totalPingHeight) / 2;
-        final int pingDrawY = playerBaseY + pingYOffset;
-
-        drawPingBars(graphics, playerRenderData.ping(), pingX, pingDrawY);
-      }
-
-      if (playerIndex >= this.players.size())
-        break;
-    }
-
-    // Draw footer
-    if (footerHeight > 0) {
-      currentY = (playerGridY + playersHeight) + extraSpacing;
-
-      final int footerTextWidth = RenderUtil.calculateComponentWidth(metrics, this.footer);
-      final int footerX = this.padding + Math.max(0, (actualContentWidth - footerTextWidth) / 2);
-      final int footerBaselineY = currentY + HEADER_FOOTER_PADDING + metrics.getAscent();
-
-      RenderUtil.drawAdventureComponent(graphics, this.footer, footerX, footerBaselineY, RenderUtil.DEFAULT_TEXT_COLOUR, TAB_TEXT_SHADOW_COLOUR);
-    }
-
-    graphics.dispose();
-    return finalImage;
-  }
-
-  private void drawPingBars(
-      Graphics2D graphics,
-      int ping,
-      int x,
-      int y)
-  {
-    final int barsToShow;
-    final Color barColour;
-
-    if (ping < 0) {
-      barsToShow = 0;
-      barColour = PING_UNKNOWN_COLOUR;
-    }
-    else if (ping < PING_GOOD_THRESHOLD) {
-      barsToShow = 5;
-      barColour = PING_GOOD_COLOUR;
-    }
-    else if (ping < PING_MEDIUM_THRESHOLD) {
-      barsToShow = 4;
-      barColour = PING_MEDIUM_COLOUR;
-    }
-    else if (ping < PING_BAD_THRESHOLD) {
-      barsToShow = 3;
-      barColour = PING_BAD_COLOUR;
-    }
-    else {
-      barsToShow = 2;
-      barColour = PING_VERY_BAD_COLOUR;
-    }
-
-    final int maxTotalBarHeight = PING_BAR_HEIGHT_INCREMENT * 5;
-    int currentX = x;
-    int currentBarHeight = PING_BAR_HEIGHT_INCREMENT;
-
-    // Draw 5 bar positions/placeholders
-    for (int i = 1; i <= 5; ++i) {
-      final int barY = y + (maxTotalBarHeight - currentBarHeight); // Align bars at the bottom
-
-      if (i <= barsToShow) {
-        graphics.setColor(barColour);
-        graphics.fillRect(currentX, barY, PING_BAR_WIDTH, currentBarHeight);
-      }
-      else if (ping >= 0) { // Only draw grey background bars if ping is known
-        graphics.setColor(PING_UNKNOWN_COLOUR);
-        graphics.fillRect(currentX, barY, PING_BAR_WIDTH, currentBarHeight);
-      }
-      currentX += PING_BAR_WIDTH + PING_BAR_SPACING;
-      currentBarHeight += PING_BAR_HEIGHT_INCREMENT;
-    }
-  }
-
-  public static Builder builder() {
+  public static @NotNull Builder builder() {
     return new Builder();
   }
 
-  public static class Builder {
-    private final List<PlayerListName> names = new ArrayList<>();
-    private int maxPlayersPerColumn = DEFAULT_MAX_PLAYERS_PER_COLUMN;
-    private int columnSpacing = DEFAULT_COLUMN_SPACING;
-    private int padding = DEFAULT_PADDING;
-    private Component header = null;
-    private Component footer = Component.text("Players Online: ", NamedTextColor.GRAY).append(Component.text("0", NamedTextColor.WHITE));
-    private Comparator<PlayerListName> customSorter = null;
-    private boolean showHeads = false;
+  private BufferedImage render() {
+    final RenderEnvironment env = this.environment;
+    final int screen = this.screenWidth;
+    final int spaceWidth = TextRenderer.width(env, StyledText.plain(" "));
 
-    private Builder() {}
+    final int count = this.entries.size();
+    final List<StyledText> names = new ArrayList<>(count);
+    final List<@Nullable StyledText> scores = new ArrayList<>(count);
+    final int[] scoreWidths = new int[count];
+    boolean hasObjective = false;
+    int nameWidth = 0;
+    int scoreColumnWidth = 0;
+    for (int i = 0; i < count; i++) {
+      final PlayerListEntry entry = this.entries.get(i);
+      final Component name = entry.spectator()
+          ? entry.displayName().decoration(TextDecoration.ITALIC, true)
+          : entry.displayName();
+      final StyledText styledName = env.text(name);
+      names.add(styledName);
+      nameWidth = Math.max(nameWidth, TextRenderer.width(env, styledName));
 
-    public Builder header(@Nullable Component header) {
+      final StyledText score = entry.score() != null ? env.text(entry.score()) : null;
+      scores.add(score);
+      if (score != null) {
+        hasObjective = true;
+        scoreWidths[i] = TextRenderer.width(env, score);
+        scoreColumnWidth = Math.max(scoreColumnWidth, scoreWidths[i] > 0 ? spaceWidth + scoreWidths[i] : 0);
+      }
+    }
+
+    int columns = 1;
+    int rows = count;
+    while (rows > MAX_ROWS_PER_COLUMN) {
+      columns++;
+      rows = (count + columns - 1) / columns;
+    }
+
+    final int scoreWidth = hasObjective ? scoreColumnWidth : 0;
+    final int columnWidth = Math.min(columns * ((this.showHeads ? 9 : 0) + nameWidth + scoreWidth + 13),
+        screen - SCREEN_MARGIN) / columns;
+    final int gridLeft = screen / 2 - (columnWidth * columns + (columns - 1) * COLUMN_GAP) / 2;
+    int totalWidth = columnWidth * columns + (columns - 1) * COLUMN_GAP;
+
+    final List<StyledText> headerLines = this.lines(this.header);
+    final List<StyledText> footerLines = this.lines(this.footer);
+    for (StyledText line : headerLines) {
+      totalWidth = Math.max(totalWidth, TextRenderer.width(env, line));
+    }
+    for (StyledText line : footerLines) {
+      totalWidth = Math.max(totalWidth, TextRenderer.width(env, line));
+    }
+
+    final int boxLeft = screen / 2 - totalWidth / 2 - 1;
+    final int boxRight = screen / 2 + totalWidth / 2 + 1;
+    final int top = 9;
+    int bottom = 10 + (headerLines.isEmpty() ? 0 : headerLines.size() * TextRenderer.LINE_HEIGHT + 1)
+        + rows * TextRenderer.LINE_HEIGHT;
+    if (!footerLines.isEmpty()) {
+      bottom += 1 + footerLines.size() * TextRenderer.LINE_HEIGHT;
+    }
+
+    final Canvas canvas = new Canvas(boxLeft, top, boxRight - boxLeft, bottom - top, this.scale);
+    final Random random = new Random();
+    int y = 10;
+
+    if (!headerLines.isEmpty()) {
+      canvas.fill(boxLeft, y - 1, boxRight, y + headerLines.size() * TextRenderer.LINE_HEIGHT, BACKGROUND);
+      for (StyledText line : headerLines) {
+        TextRenderer.draw(canvas, env, line, screen / 2 - TextRenderer.width(env, line) / 2, y, 0xFFFFFFFF, true,
+            random);
+        y += TextRenderer.LINE_HEIGHT;
+      }
+      y++;
+    }
+
+    canvas.fill(boxLeft, y - 1, boxRight, y + rows * TextRenderer.LINE_HEIGHT, BACKGROUND);
+    for (int i = 0; i < count; i++) {
+      final int column = i / rows;
+      final int row = i % rows;
+      final int columnLeft = gridLeft + column * columnWidth + column * COLUMN_GAP;
+      final int rowTop = y + row * TextRenderer.LINE_HEIGHT;
+      canvas.fill(columnLeft, rowTop, columnLeft + columnWidth, rowTop + 8, ROW_BACKGROUND);
+
+      final PlayerListEntry entry = this.entries.get(i);
+      int x = columnLeft;
+      if (this.showHeads) {
+        this.drawFace(canvas, entry, this.skins.get(i), x, rowTop);
+        x += 9;
+      }
+
+      TextRenderer.draw(canvas, env, names.get(i), x, rowTop, entry.spectator() ? SPECTATOR_COLOUR : 0xFFFFFFFF,
+          true, random);
+
+      final StyledText score = scores.get(i);
+      if (hasObjective && !entry.spectator()) {
+        final int scoreLeft = x + nameWidth + 1;
+        final int scoreRight = scoreLeft + scoreWidth;
+        if (scoreRight - scoreLeft > 5 && score != null) {
+          TextRenderer.draw(canvas, env, score, scoreRight - scoreWidths[i], rowTop, 0xFFFFFFFF, true, random);
+        }
+      }
+
+      this.drawPing(canvas, entry.latency(), columnLeft + columnWidth - 11, rowTop);
+    }
+
+    if (!footerLines.isEmpty()) {
+      y += rows * TextRenderer.LINE_HEIGHT + 1;
+      canvas.fill(boxLeft, y - 1, boxRight, y + footerLines.size() * TextRenderer.LINE_HEIGHT, BACKGROUND);
+      for (StyledText line : footerLines) {
+        TextRenderer.draw(canvas, env, line, screen / 2 - TextRenderer.width(env, line) / 2, y, 0xFFFFFFFF, true,
+            random);
+        y += TextRenderer.LINE_HEIGHT;
+      }
+    }
+
+    return ImageUtil.withBackdrop(canvas.toImage(), this.backdrop);
+  }
+
+  private List<StyledText> lines(@Nullable Component component) {
+    if (component == null) {
+      return List.of();
+    }
+    final StyledText text = this.environment.text(component);
+    if (text.plainText().isEmpty()) {
+      return List.of();
+    }
+    return TextRenderer.split(this.environment, text, this.screenWidth - SCREEN_MARGIN);
+  }
+
+  private void drawFace(Canvas canvas, PlayerListEntry entry, @Nullable Texture skin, int x, int y) {
+    Texture texture = skin;
+    if (texture == null) {
+      texture = this.environment.sprites().texture(Skins.defaultSkin(entry.uuid()));
+    }
+    if (texture == null) {
+      return;
+    }
+    final boolean upsideDown = UPSIDE_DOWN_NAMES.matcher(entry.name()).matches();
+    final float v = upsideDown ? 16 : 8;
+    final float height = upsideDown ? -8 : 8;
+    final float texelsPerPixel = texture.width() / 64f;
+    canvas.blit(texture, 8 * texelsPerPixel, v * texelsPerPixel, 8 * texelsPerPixel, height * texelsPerPixel,
+        x, y, 8, 8, -1);
+    if (entry.showHat()) {
+      canvas.blit(texture, 40 * texelsPerPixel, v * texelsPerPixel, 8 * texelsPerPixel, height * texelsPerPixel,
+          x, y, 8, 8, -1);
+    }
+  }
+
+  private void drawPing(Canvas canvas, int latency, int x, int y) {
+    final String icon;
+    if (latency < 0) {
+      icon = "icon/ping_unknown";
+    }
+    else if (latency < 150) {
+      icon = "icon/ping_5";
+    }
+    else if (latency < 300) {
+      icon = "icon/ping_4";
+    }
+    else if (latency < 600) {
+      icon = "icon/ping_3";
+    }
+    else if (latency < 1000) {
+      icon = "icon/ping_2";
+    }
+    else {
+      icon = "icon/ping_1";
+    }
+    final Sprite sprite = this.environment.sprites().sprite(Key.key(icon));
+    if (sprite != null) {
+      canvas.blitSprite(sprite, x, y, 10, 8);
+    }
+  }
+
+  private record Snapshot(
+      RenderEnvironment environment,
+      @Nullable Component header,
+      @Nullable Component footer,
+      List<PlayerListEntry> entries,
+      boolean showHeads,
+      SkinProvider skinProvider,
+      int screenWidth,
+      int scale,
+      @Nullable Color backdrop
+  ) {
+  }
+
+  public static final class Builder {
+    private final List<PlayerListEntry> entries = new ArrayList<>();
+    private @Nullable Component header;
+    private @Nullable Component footer;
+    private @Nullable Comparator<PlayerListEntry> sorter;
+    private boolean showHeads;
+    private SkinProvider skinProvider = SkinProvider.mojang();
+    private int screenWidth = 480;
+    private int scale = 2;
+    private @Nullable Color backdrop;
+    private @Nullable RenderEnvironment environment;
+
+    private Builder() {
+    }
+
+    public @NotNull Builder header(@Nullable Component header) {
       this.header = header;
       return this;
     }
 
-    public Builder footer(@Nullable Component footer) {
+    public @NotNull Builder footer(@Nullable Component footer) {
       this.footer = footer;
       return this;
     }
 
-    public Builder names(@NotNull Collection<PlayerListName> names) {
-      this.names.addAll(names);
+    public @NotNull Builder entry(@NotNull PlayerListEntry entry) {
+      this.entries.add(Objects.requireNonNull(entry, "entry"));
       return this;
     }
 
-    public Builder name(@NotNull PlayerListName name) {
-      this.names.add(name);
+    public @NotNull Builder entries(@NotNull Collection<PlayerListEntry> entries) {
+      entries.forEach(this::entry);
       return this;
     }
 
-    public Builder maxPlayersPerColumn(int maxPlayersPerColumn) {
-      this.maxPlayersPerColumn = Math.max(1, maxPlayersPerColumn);
+    /**
+     * Overrides {@link #VANILLA_ORDER}.
+     */
+    public @NotNull Builder sortBy(@Nullable Comparator<PlayerListEntry> sorter) {
+      this.sorter = sorter;
       return this;
     }
 
-    public Builder columnSpacing(int columnSpacing) {
-      this.columnSpacing = Math.max(0, columnSpacing);
-      return this;
-    }
-
-    public Builder padding(int padding) {
-      this.padding = Math.max(0, padding);
-      return this;
-    }
-
-    public Builder showNameHeads(boolean showHeads) {
+    /**
+     * Draws player faces, as vanilla does on online-mode servers. Skins are fetched with the
+     * {@link #skinProvider(SkinProvider) skin provider}. Off by default.
+     */
+    public @NotNull Builder showHeads(boolean showHeads) {
       this.showHeads = showHeads;
       return this;
     }
 
-    public Builder sortBy(@NotNull Comparator<PlayerListName> sorter) {
-      this.customSorter = sorter;
+    public @NotNull Builder skinProvider(@NotNull SkinProvider skinProvider) {
+      this.skinProvider = Objects.requireNonNull(skinProvider, "skinProvider");
       return this;
     }
 
-    public CompletableFuture<BufferedImage> build() {
-      this.names.sort(
-          Objects.requireNonNullElseGet(this.customSorter, () -> Comparator
-              .comparingInt(PlayerListName::priority)
-              .reversed() // Higher priority first
-              .thenComparing(PlayerListName::plainListName, String.CASE_INSENSITIVE_ORDER))
-      );
-
-      if (this.footer != null && this.footer.children().size() == 1
-          && this.footer.equals(Component.text("Players Online: ", NamedTextColor.GRAY).append(Component.text("0", NamedTextColor.WHITE)))) {
-        this.footer = Component.text("Players Online: ", NamedTextColor.GRAY)
-            .append(Component.text(this.names.size(), NamedTextColor.WHITE));
+    /**
+     * The scaled screen width the overlay is laid out for. It caps column widths and wraps the header and footer
+     * at {@code screenWidth - 50}. Default 480 (1080p at auto GUI scale).
+     */
+    public @NotNull Builder screenWidth(int screenWidth) {
+      if (screenWidth <= SCREEN_MARGIN) {
+        throw new IllegalArgumentException("Screen width must be greater than " + SCREEN_MARGIN);
       }
-
-      CompletableFuture<Map<String, BufferedImage>> headsFuture;
-      if (this.showHeads && !this.names.isEmpty()) {
-        final List<CompletableFuture<Map.Entry<String, BufferedImage>>> fetchFutures = this.names.stream()
-            .map(PlayerListName::plainListName)
-            .distinct()
-            .map(name -> HeadUtil.fetchPlayerHead(name)
-                .thenApply(image -> Map.entry(name, image)))
-            .toList();
-
-        // Combine all fetch futures: wait for all to complete
-        headsFuture = CompletableFuture.allOf(fetchFutures.toArray(new CompletableFuture[0]))
-            .thenApply(v -> fetchFutures.stream()
-                .map(CompletableFuture::join)
-                .filter(entry -> entry.getValue() != null)
-                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue)));
-      }
-      else {
-        headsFuture = CompletableFuture.completedFuture(Collections.emptyMap());
-      }
-
-      final Builder builderSnapshot = this.copy();
-      return headsFuture.thenApplyAsync(fetchedHeads -> {
-        final PlayerListRenderer renderer = new PlayerListRenderer(builderSnapshot, fetchedHeads);
-        return renderer.render(); // Perform the synchronous rendering part
-      });
+      this.screenWidth = screenWidth;
+      return this;
     }
 
-    private Builder copy() {
-      Builder copy = new Builder();
-      copy.names.addAll(this.names);
-      copy.maxPlayersPerColumn = this.maxPlayersPerColumn;
-      copy.columnSpacing = this.columnSpacing;
-      copy.padding = this.padding;
-      copy.header = this.header;
-      copy.footer = this.footer;
-      copy.customSorter = this.customSorter;
-      copy.showHeads = this.showHeads;
-      return copy;
+    /**
+     * @param scale output pixels per GUI pixel (the game's GUI scale), default 2
+     */
+    public @NotNull Builder scale(int scale) {
+      if (scale < 1) {
+        throw new IllegalArgumentException("Scale must be at least 1");
+      }
+      this.scale = scale;
+      return this;
+    }
+
+    /**
+     * Fills the area behind the translucent overlay (in game this is the world). Transparent by default.
+     */
+    public @NotNull Builder backdrop(@Nullable Color backdrop) {
+      this.backdrop = backdrop;
+      return this;
+    }
+
+    public @NotNull Builder environment(@Nullable RenderEnvironment environment) {
+      this.environment = environment;
+      return this;
+    }
+
+    private Snapshot snapshot() {
+      final List<PlayerListEntry> sorted = new ArrayList<>(this.entries);
+      sorted.sort(this.sorter != null ? this.sorter : VANILLA_ORDER);
+      return new Snapshot(
+          this.environment != null ? this.environment : RenderEnvironment.defaultEnvironment(),
+          this.header, this.footer,
+          List.copyOf(sorted.subList(0, Math.min(MAX_PLAYERS, sorted.size()))),
+          this.showHeads, this.skinProvider, this.screenWidth, this.scale, this.backdrop);
+    }
+
+    public @NotNull CompletableFuture<BufferedImage> build() {
+      return this.build(ForkJoinPool.commonPool());
+    }
+
+    /**
+     * Fetches skins (if heads are shown) and renders on {@code executor}. The builder can be reused.
+     */
+    public @NotNull CompletableFuture<BufferedImage> build(@NotNull Executor executor) {
+      final Snapshot snapshot = this.snapshot();
+      if (!snapshot.showHeads()) {
+        final List<Texture> noSkins = new ArrayList<>();
+        snapshot.entries().forEach(entry -> noSkins.add(null));
+        return CompletableFuture.supplyAsync(() -> new PlayerListRenderer(snapshot, noSkins).render(), executor);
+      }
+
+      final List<CompletableFuture<Texture>> skins = snapshot.entries().stream()
+          .map(entry -> snapshot.skinProvider().fetchSkin(entry)
+              .handle((image, error) -> error == null ? Skins.process(image) : null))
+          .toList();
+      return CompletableFuture.allOf(skins.toArray(CompletableFuture[]::new))
+          .thenApplyAsync(ignored -> {
+            final List<Texture> textures = new ArrayList<>(skins.size());
+            skins.forEach(skin -> textures.add(skin.join()));
+            return new PlayerListRenderer(snapshot, textures).render();
+          }, executor);
     }
   }
 }
